@@ -653,7 +653,7 @@ fn create_file_list_items(
 ) -> Vec<ListItem> {
     let mut items = Vec::new();
 
-    // Calculate column widths
+    // Calculate column widths - set to match the 10-character size padding
     let size_width = 10;
     let bar_width = 15;
     let spacing = 2;
@@ -669,8 +669,8 @@ fn create_file_list_items(
             entry.size
         };
 
-        // Format size
-        let size_str = format!("{:>9}", format_file_size(entry_size, use_si));
+        // Format size (now properly padded by format_file_size function)
+        let size_str = format_file_size(entry_size, use_si);
 
         // Create percentage bar
         let percentage = if total_size > 0 {
