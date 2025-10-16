@@ -296,37 +296,52 @@ Interactive browser interface. Currently a stub showing basic information.
 - `root` - Root entry to browse
 - `config` - Display configuration
 
-### `ui.rs` - Terminal Interface
+### `tui.rs` - Terminal User Interface
 
-#### Structures
+#### Structs
 
 ```rust
-pub struct UI
-```
-Terminal interface manager.
+pub struct TuiApp {
+    terminal: Terminal<CrosstermBackend<io::Stdout>>,
+    config: Config,
+    mode: AppMode,
+}
 
-**Methods:**
-```rust
-impl UI {
-    pub fn new() -> Self
-    pub fn init(&mut self) -> Result<()>
-    pub fn cleanup(&mut self) -> Result<()>
-    pub fn clear(&self) -> Result<()>
-    pub fn size(&self) -> Result<(u16, u16)>
-    pub fn wait_for_key(&self) -> Result<KeyCode>
-    pub fn poll_key(&self) -> Result<Option<KeyCode>>
-    pub fn move_cursor(&self, x: u16, y: u16) -> Result<()>
-    pub fn print(&self, text: &str) -> Result<()>
-    pub fn print_at(&self, x: u16, y: u16, text: &str) -> Result<()>
+pub struct ScanProgress {
+    pub current_path: Mutex<String>,
+    pub total_entries: AtomicUsize,
+    pub directories: AtomicUsize,
+    pub files: AtomicUsize,
+    pub errors: AtomicUsize,
+    pub total_size: AtomicUsize,
+    pub is_complete: AtomicBool,
 }
 ```
 
-#### Functions
+#### Methods
 
 ```rust
-pub fn initialize() -> Result<UI>
-pub fn show_oom_error() -> !
-pub fn fatal_error(message: &str) -> !
+impl TuiApp {
+    pub fn new(config: Config) -> Result<Self>
+    pub fn start_scan(&mut self, scan_path: String) -> Result<Sender<ScanMessage>>
+    pub fn run(&mut self) -> Result<()>
+}
+```
+
+#### Enums
+
+```rust
+pub enum AppMode {
+    Scanning { progress: Arc<ScanProgress>, receiver: Option<Receiver<ScanMessage>> },
+    Browsing { root: Arc<Entry>, current_dir: Arc<Entry>, path_stack: Vec<Arc<Entry>>, list_state: ListState, show_help: bool },
+    Quit,
+}
+
+pub enum ScanMessage {
+    Progress { current_path: String, stats: ProgressStats },
+    Complete { root: Arc<Entry> },
+    Error { message: String },
+}
 ```
 
 ### `import.rs` - Data Import
