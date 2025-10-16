@@ -17,7 +17,7 @@ mod import;
 mod model;
 mod scanner;
 mod tui;
-mod ui;
+
 mod utils;
 
 use cli::Args;
