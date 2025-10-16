@@ -121,7 +121,7 @@ impl Default for Config {
             graph_style: GraphStyle::Hash,
 
             // Sorting options
-            sort_col: SortColumn::Blocks,
+            sort_col: SortColumn::Size,
             sort_order: SortOrder::Desc,
             sort_dirs_first: false,
             sort_natural: true,
