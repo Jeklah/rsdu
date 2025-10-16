@@ -114,13 +114,13 @@ The project is organized into several modules:
 - **`cli.rs`** - Command-line argument parsing and validation
 - **`config.rs`** - Configuration management and file loading
 - **`scanner.rs`** - Directory scanning and file system traversal
-- **`browser.rs`** - Interactive terminal user interface
+- **`tui.rs`** - Modern TUI implementation using ratatui
+- **`browser.rs`** - Legacy browser interface (fallback)
 - **`model.rs`** - Data structures for file system representation
 - **`error.rs`** - Error types and handling
 - **`utils.rs`** - Utility functions (formatting, path handling, etc.)
 - **`export.rs`** - Data export functionality (JSON/binary)
 - **`import.rs`** - Data import functionality
-- **`ui.rs`** - Lower-level terminal interface utilities
 
 ## Performance
 
