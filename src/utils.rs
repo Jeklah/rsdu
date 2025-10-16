@@ -9,13 +9,17 @@ use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// Format file size in human-readable format
+/// Format file size in human-readable format with consistent width
 pub fn format_file_size(size: u64, use_si: bool) -> String {
-    if use_si {
+    let formatted = if use_si {
         format_size(size, DECIMAL)
     } else {
         format_size(size, BINARY)
-    }
+    };
+
+    // Ensure exact consistent width by padding to 10 characters
+    // This guarantees alignment regardless of actual size string length
+    format!("{:>10}", formatted)
 }
 
 /// Format block count in human-readable format
