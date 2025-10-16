@@ -503,9 +503,21 @@ fn sort_entries(entries: &mut Vec<Arc<Entry>>, config: &Config) {
                     a.name.cmp(&b.name)
                 }
             }
-            SortColumn::Size => a.size.cmp(&b.size),
-            SortColumn::Blocks => a.blocks.cmp(&b.blocks),
-            SortColumn::Items => 1u64.cmp(&1u64), // Placeholder - would need recursive count
+            SortColumn::Size => {
+                let a_total_size = calculate_total_entry_size(a);
+                let b_total_size = calculate_total_entry_size(b);
+                a_total_size.cmp(&b_total_size)
+            }
+            SortColumn::Blocks => {
+                let a_total_blocks = calculate_total_entry_blocks(a);
+                let b_total_blocks = calculate_total_entry_blocks(b);
+                a_total_blocks.cmp(&b_total_blocks)
+            }
+            SortColumn::Items => {
+                let a_total_items = calculate_total_entry_items(a);
+                let b_total_items = calculate_total_entry_items(b);
+                a_total_items.cmp(&b_total_items)
+            }
             SortColumn::Mtime => {
                 let a_mtime = a.extended.as_ref().and_then(|e| e.mtime);
                 let b_mtime = b.extended.as_ref().and_then(|e| e.mtime);
@@ -518,6 +530,35 @@ fn sort_entries(entries: &mut Vec<Arc<Entry>>, config: &Config) {
             SortOrder::Desc => cmp.reverse(),
         }
     });
+}
+
+/// Calculate total size including all children for an entry
+fn calculate_total_entry_size(entry: &Arc<Entry>) -> u64 {
+    entry.size
+        + entry
+            .children
+            .iter()
+            .map(|child| calculate_total_entry_size(child))
+            .sum::<u64>()
+}
+
+/// Calculate total blocks including all children for an entry
+fn calculate_total_entry_blocks(entry: &Arc<Entry>) -> u64 {
+    entry.blocks
+        + entry
+            .children
+            .iter()
+            .map(|child| calculate_total_entry_blocks(child))
+            .sum::<u64>()
+}
+
+/// Calculate total item count including all children for an entry
+fn calculate_total_entry_items(entry: &Arc<Entry>) -> u64 {
+    1 + entry
+        .children
+        .iter()
+        .map(|child| calculate_total_entry_items(child))
+        .sum::<u64>()
 }
 
 /// Natural sorting comparison (handles numbers in strings properly)
