@@ -202,15 +202,12 @@ pub fn scan_directory_with_progress(
 
 /// Scan a single entry (file or directory)
 fn scan_entry(path: &Path, context: &ScanContext) -> Result<Arc<Entry>> {
-    // Send progress update periodically
+    // Send real-time progress update for every file for scanning screen
     if let Some(ref sender) = context.progress_sender {
-        // Send update every 50 entries to avoid overwhelming the UI
-        if context.stats.get_total_entries() % 50 == 0 {
-            let _ = sender.send(ScanMessage::Progress {
-                current_path: path.display().to_string(),
-                stats: ProgressStats::from_scan_stats(&context.stats),
-            });
-        }
+        let _ = sender.send(ScanMessage::Progress {
+            current_path: path.display().to_string(),
+            stats: ProgressStats::from_scan_stats(&context.stats),
+        });
     }
     // Get metadata
     let metadata = match get_metadata(path, context.config.follow_symlinks) {
