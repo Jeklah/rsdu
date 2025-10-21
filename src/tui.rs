@@ -20,9 +20,7 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{
-        block::Title, Block, Borders, Clear, Gauge, List, ListItem, ListState, Paragraph, Wrap,
-    },
+    widgets::{block::Title, Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
     Frame, Terminal,
 };
 use std::io;
@@ -163,7 +161,9 @@ impl TuiApp {
     /// Run the main application loop
     pub fn run(&mut self) -> Result<()> {
         let mut last_tick = Instant::now();
-        let tick_rate = Duration::from_millis(250);
+        let mut last_ui_update = Instant::now();
+        let tick_rate = Duration::from_millis(50); // Faster tick rate for scanning updates
+        let ui_update_rate = Duration::from_millis(100); // UI refresh rate
 
         loop {
             // Handle updates first
@@ -172,26 +172,34 @@ impl TuiApp {
                 last_tick = Instant::now();
             }
 
-            // Draw the UI
-            let should_quit = {
-                let mode_ref = &self.mode;
-                self.terminal
-                    .draw(|f| draw_ui_for_mode(f, mode_ref, &self.config))
-                    .map_err(|e| RsduError::UiError(format!("Failed to draw: {}", e)))?;
-                matches!(self.mode, AppMode::Quit)
+            // Draw the UI at a controlled rate to avoid flickering
+            let should_draw = match &self.mode {
+                AppMode::Scanning { .. } => last_ui_update.elapsed() >= ui_update_rate,
+                _ => true, // Always draw for browsing mode
             };
 
-            if should_quit {
-                break;
+            if should_draw {
+                let should_quit = {
+                    let mode_ref = &self.mode;
+                    self.terminal
+                        .draw(|f| draw_ui_for_mode(f, mode_ref, &self.config))
+                        .map_err(|e| RsduError::UiError(format!("Failed to draw: {}", e)))?;
+                    matches!(self.mode, AppMode::Quit)
+                };
+
+                if should_quit {
+                    break;
+                }
+                last_ui_update = Instant::now();
             }
 
-            // Handle input and updates
-            let timeout = tick_rate.saturating_sub(last_tick.elapsed());
+            // Handle input
+            let timeout = Duration::from_millis(10); // Short timeout for responsiveness
             if event::poll(timeout)
-                .map_err(|e| RsduError::UiError(format!("Failed to poll events: {}", e)))?
+                .map_err(|e| RsduError::UiError(format!("Event poll error: {}", e)))?
             {
                 if let Event::Key(key) = event::read()
-                    .map_err(|e| RsduError::UiError(format!("Failed to read event: {}", e)))?
+                    .map_err(|e| RsduError::UiError(format!("Event read error: {}", e)))?
                 {
                     if key.kind == KeyEventKind::Press {
                         if self.handle_key_event(key.code)? {
@@ -210,43 +218,50 @@ impl TuiApp {
         match &mut self.mode {
             AppMode::Scanning { receiver, progress } => {
                 if let Some(rx) = receiver {
-                    // Process all available messages
-                    while let Ok(msg) = rx.try_recv() {
-                        match msg {
-                            ScanMessage::Progress {
-                                current_path,
-                                stats,
-                            } => {
-                                if let Ok(mut path) = progress.current_path.lock() {
-                                    *path = current_path;
+                    // Process multiple messages per update but limit to avoid blocking UI
+                    let mut processed = 0;
+                    while processed < 10 {
+                        match rx.try_recv() {
+                            Ok(msg) => {
+                                processed += 1;
+                                match msg {
+                                    ScanMessage::Progress {
+                                        current_path,
+                                        stats,
+                                    } => {
+                                        if let Ok(mut path) = progress.current_path.lock() {
+                                            *path = current_path;
+                                        }
+                                        progress
+                                            .total_entries
+                                            .store(stats.total_entries as usize, Ordering::Relaxed);
+                                        progress
+                                            .directories
+                                            .store(stats.directories as usize, Ordering::Relaxed);
+                                        progress
+                                            .files
+                                            .store(stats.files as usize, Ordering::Relaxed);
+                                        progress
+                                            .errors
+                                            .store(stats.errors as usize, Ordering::Relaxed);
+                                        progress
+                                            .total_size
+                                            .store(stats.total_size as usize, Ordering::Relaxed);
+                                    }
+                                    ScanMessage::Complete { root } => {
+                                        progress.is_complete.store(true, Ordering::Relaxed);
+                                        self.start_browsing(root)?;
+                                        return Ok(());
+                                    }
+                                    ScanMessage::Error { message } => {
+                                        return Err(RsduError::ScanError {
+                                            path: std::path::PathBuf::from("unknown"),
+                                            message,
+                                        });
+                                    }
                                 }
-                                progress
-                                    .total_entries
-                                    .store(stats.total_entries as usize, Ordering::Relaxed);
-                                progress
-                                    .directories
-                                    .store(stats.directories as usize, Ordering::Relaxed);
-                                progress
-                                    .files
-                                    .store(stats.files as usize, Ordering::Relaxed);
-                                progress
-                                    .errors
-                                    .store(stats.errors as usize, Ordering::Relaxed);
-                                progress
-                                    .total_size
-                                    .store(stats.total_size as usize, Ordering::Relaxed);
                             }
-                            ScanMessage::Complete { root } => {
-                                progress.is_complete.store(true, Ordering::Relaxed);
-                                self.start_browsing(root)?;
-                                return Ok(());
-                            }
-                            ScanMessage::Error { message } => {
-                                return Err(RsduError::ScanError {
-                                    path: std::path::PathBuf::from("unknown"),
-                                    message,
-                                });
-                            }
+                            Err(_) => break, // No more messages available
                         }
                     }
                 }
@@ -417,98 +432,117 @@ fn draw_ui_for_mode(f: &mut Frame, mode: &AppMode, config: &Config) {
     }
 }
 
-/// Standalone scanning UI function
+/// Enhanced scanning UI function with ncdu-like appearance
 fn draw_scanning_ui_standalone(f: &mut Frame, progress: &Arc<ScanProgress>, config: &Config) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .margin(2)
+        .margin(1)
         .constraints([
             Constraint::Length(3), // Title
-            Constraint::Length(3), // Progress bar
-            Constraint::Length(3), // Current path
-            Constraint::Min(5),    // Statistics
+            Constraint::Length(5), // Current file being scanned (larger)
+            Constraint::Length(4), // Progress info
+            Constraint::Min(6),    // Statistics (larger)
             Constraint::Length(2), // Instructions
         ])
         .split(f.size());
 
-    // Title
-    let title = Paragraph::new("rsdu - Scanning Directory")
+    // Title - ncdu style
+    let title = Paragraph::new("ncdu - Disk Usage Analyzer")
         .style(
             Style::default()
-                .fg(Color::Cyan)
+                .fg(Color::White)
                 .add_modifier(Modifier::BOLD),
         )
         .alignment(Alignment::Center)
         .block(Block::default().borders(Borders::ALL));
     f.render_widget(title, chunks[0]);
 
-    // Progress bar (simulated - we don't have total count)
-    let total_entries = progress.total_entries.load(Ordering::Relaxed);
-    let progress_ratio = if total_entries < 100 {
-        (total_entries as f64 / 100.0).min(1.0)
-    } else {
-        // After 100 entries, show a pulsing progress
-        let pulse = (total_entries / 50) % 2;
-        if pulse == 0 {
-            0.6
+    // Current file being scanned - prominent display like ncdu
+    let current_path = progress.current_path.lock().unwrap().clone();
+    let truncated_path = if current_path.len() > (chunks[1].width as usize).saturating_sub(6) {
+        let max_len = (chunks[1].width as usize).saturating_sub(9); // Leave room for "..."
+        if current_path.len() > max_len {
+            format!("...{}", &current_path[current_path.len() - max_len..])
         } else {
-            0.8
+            current_path.clone()
         }
+    } else {
+        current_path.clone()
     };
 
-    let gauge = Gauge::default()
-        .block(Block::default().borders(Borders::ALL).title("Progress"))
-        .gauge_style(Style::default().fg(Color::Green))
-        .percent((progress_ratio * 100.0) as u16)
-        .label(format!("{} items scanned", total_entries));
-    f.render_widget(gauge, chunks[1]);
-
-    // Current path
-    let current_path = progress.current_path.lock().unwrap().clone();
-    let current_path_widget = Paragraph::new(Text::from(vec![
-        Line::from("Currently scanning:"),
-        Line::from(Span::styled(
-            current_path,
-            Style::default().fg(Color::Yellow),
-        )),
+    let current_file_widget = Paragraph::new(Text::from(vec![
+        Line::from(""),
+        Line::from(vec![
+            Span::raw("Scanning: "),
+            Span::styled(
+                truncated_path,
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]),
+        Line::from(""),
     ]))
-    .block(Block::default().borders(Borders::ALL).title("Current Path"))
-    .wrap(Wrap { trim: true });
-    f.render_widget(current_path_widget, chunks[2]);
+    .block(Block::default().borders(Borders::ALL))
+    .alignment(Alignment::Left);
+    f.render_widget(current_file_widget, chunks[1]);
 
-    // Statistics
+    // Progress information
+    let total_entries = progress.total_entries.load(Ordering::Relaxed);
+    let directories = progress.directories.load(Ordering::Relaxed);
+    let files = progress.files.load(Ordering::Relaxed);
+
+    let progress_text = vec![
+        Line::from(vec![
+            Span::raw("Total items: "),
+            Span::styled(
+                total_entries.to_string(),
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" ("),
+            Span::styled(directories.to_string(), Style::default().fg(Color::Blue)),
+            Span::raw(" dirs, "),
+            Span::styled(files.to_string(), Style::default().fg(Color::Green)),
+            Span::raw(" files)"),
+        ]),
+        Line::from(""),
+    ];
+
+    let progress_info = Paragraph::new(Text::from(progress_text))
+        .block(Block::default().borders(Borders::ALL).title("Progress"))
+        .alignment(Alignment::Left);
+    f.render_widget(progress_info, chunks[2]);
+
+    // Statistics - more detailed like ncdu
+    let total_size = progress.total_size.load(Ordering::Relaxed) as u64;
+    let errors = progress.errors.load(Ordering::Relaxed);
+
     let stats_text = vec![
+        Line::from(""),
         Line::from(vec![
-            Span::raw("Directories: "),
+            Span::raw("  Total size: "),
             Span::styled(
-                progress.directories.load(Ordering::Relaxed).to_string(),
-                Style::default().fg(Color::Blue),
+                format_file_size(total_size, config.si),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
             ),
         ]),
-        Line::from(vec![
-            Span::raw("Files: "),
-            Span::styled(
-                progress.files.load(Ordering::Relaxed).to_string(),
-                Style::default().fg(Color::Green),
-            ),
-        ]),
-        Line::from(vec![
-            Span::raw("Errors: "),
-            Span::styled(
-                progress.errors.load(Ordering::Relaxed).to_string(),
-                Style::default().fg(Color::Red),
-            ),
-        ]),
-        Line::from(vec![
-            Span::raw("Total Size: "),
-            Span::styled(
-                format_file_size(
-                    progress.total_size.load(Ordering::Relaxed) as u64,
-                    config.si,
+        Line::from(""),
+        if errors > 0 {
+            Line::from(vec![
+                Span::raw("  Errors: "),
+                Span::styled(
+                    errors.to_string(),
+                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
                 ),
-                Style::default().fg(Color::Cyan),
-            ),
-        ]),
+            ])
+        } else {
+            Line::from("")
+        },
+        Line::from(""),
     ];
 
     let stats_widget = Paragraph::new(Text::from(stats_text))
@@ -517,10 +551,9 @@ fn draw_scanning_ui_standalone(f: &mut Frame, progress: &Arc<ScanProgress>, conf
     f.render_widget(stats_widget, chunks[3]);
 
     // Instructions
-    let instructions = Paragraph::new("Press 'q' to cancel")
-        .style(Style::default().fg(Color::Gray))
-        .alignment(Alignment::Center)
-        .block(Block::default());
+    let instructions = Paragraph::new("Press q to quit, or wait for scan to complete...")
+        .style(Style::default().fg(Color::DarkGray))
+        .alignment(Alignment::Center);
     f.render_widget(instructions, chunks[4]);
 }
 
